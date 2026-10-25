@@ -16,26 +16,13 @@ services:
   redis:
     image: redis:7-alpine
     command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec"]
-    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec"]
     ports: ["6379:6379"]
-    volumes:
-      - redisdata:/data
     volumes:
       - redisdata:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 3s
       retries: 15
-  worker:
-    build: .
-    command: ["npm", "run", "worker"]
-    environment:
-      DATABASE_URL: postgres://telemetry:telemetry@postgres:5432/telemetry
-      REDIS_URL: redis://redis:6379
-    depends_on:
-      postgres: { condition: service_healthy }
-      redis: { condition: service_healthy }
-    restart: unless-stopped
   worker:
     build: .
     command: ["npm", "run", "worker"]
@@ -54,11 +41,12 @@ services:
       REDIS_URL: redis://redis:6379
       CLIENT_ORIGIN: http://localhost:5173
       INGEST_API_KEY: ${INGEST_API_KEY:-local-demo-key-change-me}
+      DASHBOARD_TOKEN: ${DASHBOARD_TOKEN:-local-dashboard-token-change-me}
+      DEVICE_API_KEYS: ${DEVICE_API_KEYS:-}
     ports: ["3000:3000"]
     depends_on:
       postgres: { condition: service_healthy }
       redis: { condition: service_healthy }
 volumes:
   pgdata:
-  redisdata:
   redisdata:

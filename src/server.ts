@@ -2,7 +2,7 @@ import "dotenv/config";
 import express from "express";
 import cors from "cors";
 import { createServer } from "node:http";
-import { timingSafeEqual } from "node:crypto";
+import { dashboardAuthorized, requireDashboard, validDeviceKey } from "./auth";
 import { Server } from "socket.io";
 import { createClient } from "redis";
 import { enqueueTelemetry, redisClient, UPDATE_CHANNEL } from "./queue";
@@ -20,14 +20,6 @@ const io = new Server(httpServer, { cors: { origin }, transports: ["websocket"] 
 let ready = false;
 let shuttingDown = false;
 
-function validKey(provided: unknown): boolean {
-  const expected = process.env.INGEST_API_KEY;
-  if (typeof provided !== "string" || !expected) return false;
-  const a = Buffer.from(provided);
-  const b = Buffer.from(expected);
-  return a.length === b.length && timingSafeEqual(a, b);
-}
-
 app.get("/live", (_req, res) => res.json({ status: "alive" }));
 
 app.get("/health", async (_req, res, next) => {
@@ -38,12 +30,12 @@ app.get("/health", async (_req, res, next) => {
   } catch (error) { next(error); }
 });
 
-app.get("/api/robots", async (_req, res, next) => {
+app.get("/api/robots", requireDashboard, async (_req, res, next) => {
   try { res.json({ items: await latestRobots() }); }
   catch (error) { next(error); }
 });
 
-app.get("/api/robots/:deviceId/history", async (req, res, next) => {
+app.get("/api/robots/:deviceId/history", requireDashboard, async (req, res, next) => {
   const deviceId = z.string().min(1).max(100).regex(/^[a-zA-Z0-9_-]+$/).safeParse(req.params.deviceId);
   const limit = z.coerce.number().int().min(1).max(500).safeParse(req.query.limit ?? 100);
   if (!deviceId.success || !limit.success) {
@@ -54,22 +46,32 @@ app.get("/api/robots/:deviceId/history", async (req, res, next) => {
 });
 
 // Legacy path retained for callers of the original starter API.
-app.get("/api/telemetry", async (_req, res, next) => {
+app.get("/api/telemetry", requireDashboard, async (_req, res, next) => {
   try { res.json({ items: await latestRobots() }); }
   catch (error) { next(error); }
 });
 
 app.post("/api/telemetry", async (req, res, next) => {
   if (shuttingDown) return res.status(503).json({ error: "Server is shutting down" });
-  if (!validKey(req.header("x-api-key"))) return res.status(401).json({ error: "Invalid ingestion API key" });
   const parsed = telemetrySchema.safeParse(req.body);
+  // Authenticate before accepting an event; never authorize a device for another ID.
   if (!parsed.success) return res.status(400).json({ error: "Invalid telemetry", details: parsed.error.flatten() });
+  if (!validDeviceKey(req.header("x-api-key"), parsed.data.deviceId))
+    return res.status(401).json({ error: "Invalid device API key" });
   const event = normalizeTelemetry(parsed.data);
   try {
     if (!redisQueue?.isReady) return res.status(503).json({ error: "Queue unavailable" });
     const queueId = await enqueueTelemetry(redisQueue, event);
     return res.status(202).json({ event, queueId, status: "queued" });
   } catch (error) { return next(error); }
+});
+
+io.use((socket, next) => {
+  if (!dashboardAuthorized(socket.handshake.auth?.token)) {
+    next(new Error("Unauthorized dashboard connection"));
+    return;
+  }
+  next();
 });
 
 io.on("connection", (socket) => {
@@ -127,8 +129,9 @@ process.once("SIGTERM", () => { void shutdown("SIGTERM"); });
 process.once("SIGINT", () => { void shutdown("SIGINT"); });
 
 async function main() {
-  if (!process.env.DATABASE_URL || !process.env.REDIS_URL || !process.env.INGEST_API_KEY)
-    throw new Error("DATABASE_URL, REDIS_URL, and INGEST_API_KEY are required");
+  if (!process.env.DATABASE_URL || !process.env.REDIS_URL || !process.env.DASHBOARD_TOKEN ||
+      (!process.env.INGEST_API_KEY && !process.env.DEVICE_API_KEYS))
+    throw new Error("DATABASE_URL, REDIS_URL, DASHBOARD_TOKEN, and an ingestion credential are required");
   const pub = createClient({ url: process.env.REDIS_URL });
   const sub = pub.duplicate();
   pub.on("error", console.error);

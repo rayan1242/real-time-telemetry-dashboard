@@ -21,6 +21,8 @@ vi.mock("./hooks/useTelemetry", () => ({
 describe("fleet dashboard filtering", () => {
   it("filters robots by ID and status", () => {
     render(<App />);
+    fireEvent.change(screen.getByLabelText("Dashboard token"), { target: { value: "demo-token" } });
+    fireEvent.click(screen.getByRole("button", { name: "Open dashboard" }));
     expect(screen.getByText("2 of 2 robots")).toBeTruthy();
     fireEvent.change(screen.getByRole("searchbox"), { target: { value: "robot-001" } });
     expect(screen.getByText("1 of 2 robots")).toBeTruthy();

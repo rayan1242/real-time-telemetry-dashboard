@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { alertsForRobot } from "./alerts";
 import { useTelemetry } from "./hooks/useTelemetry";
 import MetricChart from "./components/MetricChart";
 import RobotCard from "./components/RobotCard";
@@ -6,7 +7,9 @@ import { API, HISTORY_LIMIT, isOnline, timeLabel, type Robot, type Metric, type 
 
 
 export default function App() {
-  const { robots, connected, snapshotError, now, items } = useTelemetry();
+  const [enteredToken, setEnteredToken] = useState("");
+  const [token, setToken] = useState("");
+  const { robots, connected, snapshotError, now, items } = useTelemetry(token);
   const [selected, setSelected] = useState<string | null>(null);
   const [history, setHistory] = useState<Robot[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
@@ -19,14 +22,14 @@ export default function App() {
   useEffect(() => { setHistory([]); setHistoryError(""); }, [selected]);
 
   useEffect(() => {
-    if (!selected) return;
+    if (!selected || !token) return;
     let active = true;
     const controller = new AbortController();
     setHistoryLoading(true);
     setHistoryError("");
     const load = async () => {
       try {
-        const response = await fetch(`${API}/api/robots/${encodeURIComponent(selected)}/history?limit=${HISTORY_LIMIT}`, { signal: controller.signal });
+        const response = await fetch(`${API}/api/robots/${encodeURIComponent(selected)}/history?limit=${HISTORY_LIMIT}`, { signal: controller.signal, headers: { authorization: `Bearer ${token}` } });
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         const data: { items: Robot[] } = await response.json();
         if (active) { setHistory(data.items); setHistoryError(""); }
@@ -38,13 +41,25 @@ export default function App() {
     };
     void load();
     return () => { active = false; controller.abort(); };
-  }, [selected, selectedTimestamp]);
+  }, [selected, selectedTimestamp, token]);
 
   const online = items.filter(robot => isOnline(robot, now)).length;
   const visible = items.filter(robot => robot.deviceId.toLowerCase().includes(search.trim().toLowerCase()) &&
     (status === "all" || (status === "online" ? isOnline(robot, now) : !isOnline(robot, now))));
   const current = selected ? robots[selected] : undefined;
   const last = history[history.length - 1];
+  const alerts = items.flatMap(alertsForRobot);
+
+  if (!token) return (
+    <main className="login-page"><form className="login-panel" onSubmit={event => { event.preventDefault(); setToken(enteredToken.trim()); }}>
+      <p className="eyebrow">SECURE FLEET MONITORING</p><h1>Operator access</h1>
+      <p>Enter the dashboard access token configured on the API server.</p>
+      <label htmlFor="dashboard-token">Dashboard token</label>
+      <input id="dashboard-token" type="password" autoComplete="off" value={enteredToken} onChange={event => setEnteredToken(event.target.value)} required />
+      <button type="submit" disabled={!enteredToken.trim()}>Open dashboard</button>
+      <small>Demo access only. The token stays in memory and is cleared on refresh.</small>
+    </form></main>
+  );
 
   return (
     <main>
@@ -54,9 +69,9 @@ export default function App() {
           <h1>Robot telemetry</h1>
           <p>Real-time robot health, sensor readings, and historical trends.</p>
         </div>
-        <span className={connected ? "pill good" : "pill bad"} role="status">
+        <div className="header-actions"><button type="button" className="close-button" onClick={() => { setToken(""); setEnteredToken(""); setSelected(null); }}>Sign out</button><span className={connected ? "pill good" : "pill bad"} role="status">
           <span className="status-dot" /> {connected ? "Live connection" : "Reconnecting"}
-        </span>
+        </span></div>
       </header>
 
       {snapshotError && <p className="notice" role="alert">Unable to refresh robot snapshot: {snapshotError}. Live updates may be incomplete.</p>}
@@ -67,6 +82,11 @@ export default function App() {
         <div><small>Offline</small><strong className={items.length - online ? "bad" : ""}>{items.length - online}</strong><span>Awaiting recent telemetry</span></div>
       </section>
 
+      <section className="alert-section" aria-label="Active telemetry alerts">
+        <div className="section-heading"><div><p className="eyebrow">HEALTH CHECKS</p><h2>Active alerts</h2></div><span className="count">{alerts.length} alerts</span></div>
+        {alerts.length ? <div className="alert-list">{alerts.map(alert => <div className="alert-item" key={`${alert.deviceId}-${alert.kind}`} role="status"><strong>{alert.deviceId}</strong><span>{alert.message}</span></div>)}</div>
+          : <p className="alert-clear">No temperature or battery threshold violations.</p>}
+      </section>
       <section className="fleet-section">
         <div className="section-heading"><div><p className="eyebrow">FLEET</p><h2>Robot overview</h2></div><span className="count">{visible.length} of {items.length} robots</span></div>
         <div className="toolbar">
@@ -103,7 +123,7 @@ export default function App() {
         {last && <p className="chart-footnote">Latest chart reading: {last[metric].toFixed(1)}{metric === "temperature" ? "°C" : "%"} at {timeLabel(last.timestamp)}</p>}
       </section>}
 
-      <footer>Local demonstration · WebSocket updates are best-effort; REST snapshots restore state after reconnecting. Authentication and tenant isolation are not yet implemented.</footer>
+      <footer>Local demonstration · Operator token authentication is enabled, but tenant isolation, expiring sessions and production identity management are not implemented. Alerts are derived from the latest readings, not persisted.</footer>
     </main>
   );
 }

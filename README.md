@@ -124,3 +124,32 @@ To test recovery, start `npm run simulate`, run `docker compose stop worker` whi
 - The stream currently has no retention policy, memory limit, queue-depth admission control, or automated DLQ replay. Do not claim it is safe for unbounded production load.
 - A long database outage may exhaust five attempts and move events to the DLQ. Those events require explicit replay.
 - The integration tests require running Docker services; code has been committed but end-to-end execution must be verified locally.
+
+
+## Phase 4: Operator access, device identity and threshold alerts
+
+**Local demonstration, not a production authentication service.** The API now requires a separate `DASHBOARD_TOKEN` for fleet REST endpoints and Socket.IO connections. Operators enter this token in the dashboard; React keeps it in memory, not localStorage. The browser sends `Authorization: Bearer <token>` for REST and `auth.token` during the Socket.IO handshake. Invalid credentials receive HTTP 401 or a Socket.IO connection error. Restarting/reloading the page requires entering the token again.
+
+Docker Compose defaults to `local-dashboard-token-change-me` for local development only. Override `DASHBOARD_TOKEN` and `INGEST_API_KEY` with strong, different secrets before any shared environment. Do not commit real secrets or expose an ingestion key in frontend code. Use TLS for traffic outside localhost.
+
+Device ingestion continues to require `x-api-key`. By default the simulator uses the shared development `INGEST_API_KEY`. Optionally configure `DEVICE_API_KEYS` as a JSON object mapping device IDs to distinct keys. When configured, a device's key is valid **only for its own deviceId** and the shared fallback is disabled. The default simulator does not automatically select per-device keys; adapt it before enabling this option.
+
+**Live alerts** currently run in the React client against each robot's latest known temperature and battery. They trigger at temperature >= 35°C or battery <= 20%. They are visual threshold indicators, **not durable alerts**: no alert table, acknowledgments, notification delivery, per-device rules or historical alert records are implemented. Offline readings may still appear as last-known threshold violations.
+
+To run:
+```bash
+git switch feature/dashboard-auth-alerts
+docker compose up --build -d
+npm install
+npm run typecheck
+npm test
+npm run test:integration
+cd web
+npm install
+npm run build
+npm test
+npm run dev
+```
+Open http://localhost:5173 and enter the configured `DASHBOARD_TOKEN`. In another terminal at the repo root, run `npm run simulate`. To test the access boundary, `curl -i http://localhost:3000/api/robots` should return HTTP 401, while the same request with `-H 'Authorization: Bearer <token>'` should succeed.
+
+**Limitations:** A shared operator token is not individual user authentication or authorization. There is no identity provider, user session expiration, refresh token, audit trail, rate limiting, tenant isolation, CSRF strategy for cookie sessions, or credential rotation. A static bearer token grants the same fleet access to every holder. Those are required before production use. Tests and build must be run locally; commits alone do not verify runtime behavior.
