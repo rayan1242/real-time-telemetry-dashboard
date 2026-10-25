@@ -75,11 +75,15 @@ app.post("/api/telemetry", async (req, res, next) => {
 });
 
 io.on("connection", (socket) => {
-  socket.on("watch", (deviceIds: unknown) => {
+  socket.on("watch", (deviceIds: unknown, acknowledge?: (result: { ok: boolean }) => void) => {
     if (!Array.isArray(deviceIds) || deviceIds.length > 100 ||
-        deviceIds.some(id => typeof id !== "string" || !/^[a-zA-Z0-9_-]{1,100}$/.test(id))) return;
+        deviceIds.some(id => typeof id !== "string" || !/^[a-zA-Z0-9_-]{1,100}$/.test(id))) {
+      acknowledge?.({ ok: false });
+      return;
+    }
     for (const room of socket.rooms) if (room.startsWith("robot:")) socket.leave(room);
     for (const id of deviceIds) socket.join(`robot:${id}`);
+    acknowledge?.({ ok: true });
   });
 });
 
