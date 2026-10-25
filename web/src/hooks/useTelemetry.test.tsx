@@ -46,7 +46,7 @@ describe("useTelemetry", () => {
   });
 
   it("loads an initial REST snapshot and subscribes when connected", async () => {
-    const { result, unmount } = renderHook(() => useTelemetry());
+    const { result, unmount } = renderHook(() => useTelemetry("demo-token"));
     await waitFor(() => expect(result.current.items).toHaveLength(1));
     act(() => {
       socketMock.socket.connected = true;
@@ -59,7 +59,7 @@ describe("useTelemetry", () => {
   });
 
   it("accepts live events and rejects older updates", async () => {
-    const { result, unmount } = renderHook(() => useTelemetry());
+    const { result, unmount } = renderHook(() => useTelemetry("demo-token"));
     await waitFor(() => expect(result.current.items).toHaveLength(1));
     act(() => {
       emit("telemetry", newer);
@@ -74,7 +74,7 @@ describe("useTelemetry", () => {
       .mockResolvedValueOnce({ ok: true, json: async () => ({ items: [first] }) })
       .mockResolvedValueOnce({ ok: true, json: async () => ({ items: [newer] }) });
     vi.stubGlobal("fetch", fetchMock);
-    const { result, unmount } = renderHook(() => useTelemetry());
+    const { result, unmount } = renderHook(() => useTelemetry("demo-token"));
     await waitFor(() => expect(result.current.robots["robot-001"]?.temperature).toBe(24));
     act(() => emit("disconnect"));
     act(() => {
