@@ -130,7 +130,7 @@ export default function App() {
   }, []);
 
   const items = useMemo(() => Object.values(robots).sort((a, b) => a.deviceId.localeCompare(b.deviceId)), [robots]);
-  const deviceIds = useMemo(() => items.map(robot => robot.deviceId), [items]);
+  const deviceIds = useMemo(() => Array.from(new Set([...Array.from({ length: 12 }, (_, i) => `robot-${String(i + 1).padStart(3, "0")}`), ...items.map(robot => robot.deviceId)])), [items]);
   const deviceKey = deviceIds.join("|");
 
   useEffect(() => {
@@ -146,12 +146,13 @@ export default function App() {
   }, [deviceKey]);
 
   const selectedTimestamp = selected ? robots[selected]?.timestamp : undefined;
+  useEffect(() => { setHistory([]); setHistoryError(""); }, [selected]);
+
   useEffect(() => {
-    if (!selected) { setHistory([]); setHistoryError(""); return; }
+    if (!selected) return;
     let active = true;
     const controller = new AbortController();
     setHistoryLoading(true);
-    setHistory([]);
     setHistoryError("");
     const load = async () => {
       try {
