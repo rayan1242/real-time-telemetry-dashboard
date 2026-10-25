@@ -65,3 +65,23 @@ curl -X POST http://localhost:3000/api/telemetry \
 This is an interview-ready **local demo**, not a production multi-tenant service or a verified 10,000-robot benchmark. The dashboard and WebSocket watch events are **not authenticated**. Before production use: add user sessions, tenant-aware authorization for REST and socket rooms, rate limiting, TLS, migrations, durable outbox/queue for reliable notifications, observability, partitioning/retention, proper backpressure, and load tests. The Redis Pub/Sub adapter does not provide connection-state recovery; the REST snapshot handles current-state resynchronization, not historical replay.
 
 The demo uses a shared development API key. Replace it and never expose it in a browser application.
+
+## Step 1: Reliability and integration testing
+
+The API exposes `GET /live` (process liveness) and `GET /health` (readiness including a database check). SIGTERM/SIGINT mark the service unready, disconnect WebSockets, close the HTTP server, and release Redis and PostgreSQL connections. The graceful shutdown deadline is 10 seconds.
+
+To verify the real stack locally:
+
+```bash
+docker compose up --build -d
+npm install
+npm run typecheck
+npm test
+npm run test:integration
+```
+
+The integration test calls the running API and checks authenticated ingestion, duplicate suppression, stale-event ordering, PostgreSQL history, and delivery over a real Socket.IO connection. It uses unique test robot IDs, so repeated runs do not collide.
+
+`npm run test:integration` requires a running Docker Compose stack; it is not a mock test. A successful commit alone does not prove these tests have passed. For a manual crash test, run the simulator and dashboard, then execute `docker compose restart api` and observe reconnect/snapshot behavior.
+
+Next steps: run tests on CI with service containers, add durable queuing and a worker, and run repeatable load tests. This project is still a local demo; there is no tenant authorization.
