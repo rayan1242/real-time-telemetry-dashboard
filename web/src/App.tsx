@@ -1,149 +1,19 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { io, type Socket } from "socket.io-client";
+import { useEffect, useState } from "react";
+import { useTelemetry } from "./hooks/useTelemetry";
+import MetricChart from "./components/MetricChart";
+import RobotCard from "./components/RobotCard";
+import { API, HISTORY_LIMIT, isOnline, timeLabel, type Robot, type Metric, type StatusFilter } from "./telemetry";
 
-type Robot = {
-  deviceId: string;
-  temperature: number;
-  battery: number;
-  timestamp: string;
-  eventId?: string;
-};
-type StatusFilter = "all" | "online" | "offline";
-type Metric = "temperature" | "battery";
-
-const API = import.meta.env.VITE_API_URL ?? "http://localhost:3000";
-const OFFLINE_AFTER_MS = 10_000;
-const HISTORY_LIMIT = 80;
-
-function merge(current: Record<string, Robot>, next: Robot): Record<string, Robot> {
-  const previous = current[next.deviceId];
-  if (previous && Date.parse(previous.timestamp) > Date.parse(next.timestamp)) return current;
-  return { ...current, [next.deviceId]: next };
-}
-
-function isOnline(robot: Robot, now: number) {
-  return now - Date.parse(robot.timestamp) < OFFLINE_AFTER_MS;
-}
-
-function timeLabel(value: string) {
-  const time = new Date(value);
-  return Number.isNaN(time.getTime()) ? "Unknown" : time.toLocaleTimeString();
-}
-
-function MetricChart({ points, metric }: { points: Robot[]; metric: Metric }) {
-  const values = points.map(point => point[metric]);
-  if (!values.length) return <div className="chart-empty">No historical readings yet.</div>;
-
-  const width = 720;
-  const height = 220;
-  const left = 44;
-  const right = 14;
-  const top = 18;
-  const bottom = 32;
-  const plotWidth = width - left - right;
-  const plotHeight = height - top - bottom;
-  const minimum = metric === "battery" ? 0 : Math.floor(Math.min(...values) - 2);
-  const maximum = metric === "battery" ? 100 : Math.ceil(Math.max(...values) + 2);
-  const span = Math.max(1, maximum - minimum);
-  const x = (index: number) => left + (values.length === 1 ? plotWidth / 2 : index * plotWidth / (values.length - 1));
-  const y = (value: number) => top + (maximum - value) / span * plotHeight;
-  const coordinates = values.map((value, index) => `${x(index)},${y(value)}`).join(" ");
-  const fillPath = `M ${x(0)} ${y(values[0])} ${values.slice(1).map((value, index) => `L ${x(index + 1)} ${y(value)}`).join(" ")} L ${x(values.length - 1)} ${top + plotHeight} L ${x(0)} ${top + plotHeight} Z`;
-  const ticks = [0, 0.5, 1];
-
-  return (
-    <div className="chart-wrap">
-      <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label={`${metric} over the last ${points.length} readings`}>
-        <defs>
-          <linearGradient id={`fill-${metric}`} x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor={metric === "temperature" ? "#60e0c1" : "#81a9ff"} stopOpacity=".3" />
-            <stop offset="100%" stopColor={metric === "temperature" ? "#60e0c1" : "#81a9ff"} stopOpacity="0" />
-          </linearGradient>
-        </defs>
-        {ticks.map(tick => {
-          const value = minimum + tick * span;
-          const position = y(value);
-          return <g key={tick}>
-            <line x1={left} x2={width - right} y1={position} y2={position} stroke="#30435a" strokeDasharray="4 5" />
-            <text x={left - 9} y={position + 4} fill="#a6b6ce" textAnchor="end" fontSize="12">{value.toFixed(0)}</text>
-          </g>;
-        })}
-        <path d={fillPath} fill={`url(#fill-${metric})`} />
-        <polyline points={coordinates} fill="none" stroke={metric === "temperature" ? "#60e0c1" : "#81a9ff"} strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
-        <circle cx={x(values.length - 1)} cy={y(values[values.length - 1])} r="4" fill={metric === "temperature" ? "#60e0c1" : "#81a9ff"} />
-        <text x={left} y={height - 7} fill="#a6b6ce" fontSize="12">{timeLabel(points[0].timestamp)}</text>
-        <text x={width - right} y={height - 7} fill="#a6b6ce" fontSize="12" textAnchor="end">{timeLabel(points[points.length - 1].timestamp)}</text>
-      </svg>
-    </div>
-  );
-}
 
 export default function App() {
-  const [robots, setRobots] = useState<Record<string, Robot>>({});
-  const [connected, setConnected] = useState(false);
+  const { robots, connected, snapshotError, now, items } = useTelemetry();
   const [selected, setSelected] = useState<string | null>(null);
   const [history, setHistory] = useState<Robot[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyError, setHistoryError] = useState("");
-  const [snapshotError, setSnapshotError] = useState("");
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState<StatusFilter>("all");
   const [metric, setMetric] = useState<Metric>("temperature");
-  const [now, setNow] = useState(Date.now());
-  const socketRef = useRef<Socket | null>(null);
-
-  useEffect(() => {
-    let active = true;
-    async function refresh() {
-      try {
-        const response = await fetch(`${API}/api/robots`);
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        const data: { items: Robot[] } = await response.json();
-        if (!active) return;
-        setRobots(previous => data.items.reduce(merge, previous));
-        setSnapshotError("");
-      } catch (error) {
-        if (active) setSnapshotError(error instanceof Error ? error.message : "Snapshot unavailable");
-      }
-    }
-
-    const socket = io(API, { transports: ["websocket"], reconnectionDelayMax: 10_000 });
-    socketRef.current = socket;
-    socket.on("connect", () => {
-      if (!active) return;
-      setConnected(true);
-      // Re-fetch after reconnect: Socket.IO notifications are not durable.
-      void refresh();
-    });
-    socket.on("disconnect", () => { if (active) setConnected(false); });
-    socket.on("telemetry", (event: Robot) => {
-      if (active) setRobots(previous => merge(previous, event));
-    });
-    void refresh();
-    const timer = window.setInterval(() => setNow(Date.now()), 1000);
-    return () => {
-      active = false;
-      socket.disconnect();
-      socketRef.current = null;
-      window.clearInterval(timer);
-    };
-  }, []);
-
-  const items = useMemo(() => Object.values(robots).sort((a, b) => a.deviceId.localeCompare(b.deviceId)), [robots]);
-  const deviceIds = useMemo(() => Array.from(new Set([...Array.from({ length: 12 }, (_, i) => `robot-${String(i + 1).padStart(3, "0")}`), ...items.map(robot => robot.deviceId)])), [items]);
-  const deviceKey = deviceIds.join("|");
-
-  useEffect(() => {
-    const socket = socketRef.current;
-    if (!socket) return;
-    const subscribe = () => {
-      // The server limits subscriptions to 100 rooms per socket.
-      socket.emit("watch", deviceIds.slice(0, 100));
-    };
-    socket.on("connect", subscribe);
-    if (socket.connected) subscribe();
-    return () => { socket.off("connect", subscribe); };
-  }, [deviceKey]);
 
   const selectedTimestamp = selected ? robots[selected]?.timestamp : undefined;
   useEffect(() => { setHistory([]); setHistoryError(""); }, [selected]);
@@ -210,15 +80,7 @@ export default function App() {
           </div>
         </div>
         <div className="grid">
-          {visible.map(robot => {
-            const live = isOnline(robot, now);
-            return <button type="button" key={robot.deviceId} className={`robot ${selected === robot.deviceId ? "selected" : ""}`} onClick={() => setSelected(robot.deviceId)} aria-pressed={selected === robot.deviceId}>
-              <div className="robot-title"><b>{robot.deviceId}</b><span className={live ? "online" : "offline"}><span className="status-dot" /> {live ? "Online" : "Offline"}</span></div>
-              <div className="readings"><div><small>Temperature</small><strong>{robot.temperature.toFixed(1)}°C</strong></div><div><small>Battery</small><strong>{robot.battery.toFixed(0)}%</strong></div></div>
-              <div className="battery-track" aria-hidden="true"><div style={{ width: `${Math.max(0, Math.min(100, robot.battery))}%` }} /></div>
-              <small>Last seen {timeLabel(robot.timestamp)}</small>
-            </button>;
-          })}
+          {visible.map(robot => <RobotCard key={robot.deviceId} robot={robot} now={now} selected={selected === robot.deviceId} onSelect={setSelected} />)}
           {!items.length && <div className="empty-state">No telemetry yet. Start the simulator to see live robots.</div>}
           {!!items.length && !visible.length && <div className="empty-state">No robots match your filters.</div>}
         </div>
