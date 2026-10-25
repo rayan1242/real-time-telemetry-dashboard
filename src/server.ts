@@ -23,6 +23,7 @@ const maxQueueLag = Number(process.env.MAX_QUEUE_LAG ?? 5000);
 
 async function queueStats() {
   if (!redisQueue?.isReady) throw new Error("Redis queue unavailable");
+  if (!(await redisQueue.exists(STREAM))) return { streamEntries: 0, pending: 0, lag: null };
   const [length, groups] = await Promise.all([redisQueue.xLen(STREAM), redisQueue.xInfoGroups(STREAM)]);
   const group = groups.find(item => item.name === GROUP);
   return { streamEntries: length, pending: group?.pending ?? 0, lag: group?.lag ?? null };
