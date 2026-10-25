@@ -3,7 +3,7 @@ import { io, type Socket } from "socket.io-client";
 import { API, merge, type Robot } from "../telemetry";
 
 /** Owns the live transport, fleet snapshot and reconnect synchronization. */
-export function useTelemetry() {
+export function useTelemetry(token: string) {
   const [robots, setRobots] = useState<Record<string, Robot>>({});
   const [connected, setConnected] = useState(false);
   const [snapshotError, setSnapshotError] = useState("");
@@ -11,10 +11,11 @@ export function useTelemetry() {
   const socketRef = useRef<Socket | null>(null);
 
   useEffect(() => {
+    if (!token) { setRobots({}); setConnected(false); setSnapshotError(""); return; }
     let active = true;
     async function refresh() {
       try {
-        const response = await fetch(`${API}/api/robots`);
+        const response = await fetch(`${API}/api/robots`, { headers: { authorization: `Bearer ${token}` } });
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         const data: { items: Robot[] } = await response.json();
         if (!active) return;
@@ -24,7 +25,7 @@ export function useTelemetry() {
         if (active) setSnapshotError(error instanceof Error ? error.message : "Snapshot unavailable");
       }
     }
-    const socket = io(API, { transports: ["websocket"], reconnectionDelayMax: 10_000 });
+    const socket = io(API, { transports: ["websocket"], auth: { token }, reconnectionDelayMax: 10_000 });
     socketRef.current = socket;
     socket.on("connect", () => {
       if (!active) return;
@@ -44,7 +45,7 @@ export function useTelemetry() {
       socketRef.current = null;
       window.clearInterval(timer);
     };
-  }, []);
+  }, [token]);
 
   const items = useMemo(() => Object.values(robots).sort((a, b) => a.deviceId.localeCompare(b.deviceId)), [robots]);
   const deviceIds = useMemo(
