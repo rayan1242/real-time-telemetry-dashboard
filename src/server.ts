@@ -5,7 +5,7 @@ import { createServer } from "node:http";
 import { dashboardAuthorized, requireDashboard, validDeviceKey } from "./auth";
 import { Server } from "socket.io";
 import { createClient } from "redis";
-import { enqueueTelemetry, redisClient, UPDATE_CHANNEL } from "./queue";
+import { enqueueTelemetry, redisClient, UPDATE_CHANNEL, STREAM, GROUP } from "./queue";
 import { createAdapter } from "@socket.io/redis-adapter";
 import { z } from "zod";
 import { pool, latestRobots, robotHistory } from "./db";
@@ -19,6 +19,15 @@ const httpServer = createServer(app);
 const io = new Server(httpServer, { cors: { origin }, transports: ["websocket"] });
 let ready = false;
 let shuttingDown = false;
+const maxQueueLag = Number(process.env.MAX_QUEUE_LAG ?? 5000);
+
+async function queueStats() {
+  if (!redisQueue?.isReady) throw new Error("Redis queue unavailable");
+  const [length, groups] = await Promise.all([redisQueue.xLen(STREAM), redisQueue.xInfoGroups(STREAM)]);
+  const group = groups.find(item => item.name === GROUP);
+  return { streamEntries: length, pending: group?.pending ?? 0, lag: group?.lag ?? null };
+}
+
 
 app.get("/live", (_req, res) => res.json({ status: "alive" }));
 
@@ -28,6 +37,11 @@ app.get("/health", async (_req, res, next) => {
     await Promise.all([pool.query("SELECT 1"), redisQueue?.ping() ?? Promise.reject(new Error("Redis not ready"))]);
     res.json({ status: "ok" });
   } catch (error) { next(error); }
+});
+
+app.get("/api/ops/queue", requireDashboard, async (_req, res, next) => {
+  try { res.json(await queueStats()); }
+  catch (error) { next(error); }
 });
 
 app.get("/api/robots", requireDashboard, async (_req, res, next) => {
@@ -61,6 +75,15 @@ app.post("/api/telemetry", async (req, res, next) => {
   const event = normalizeTelemetry(parsed.data);
   try {
     if (!redisQueue?.isReady) return res.status(503).json({ error: "Queue unavailable" });
+    // Reject excessive *undelivered* backlog without trimming unprocessed events.
+    // XINFO lag is approximate; this is admission control, not a hard queue cap.
+    if (Number.isFinite(maxQueueLag) && maxQueueLag > 0) {
+      const { lag } = await queueStats();
+      if (lag !== null && lag >= maxQueueLag) {
+        res.setHeader("Retry-After", "2");
+        return res.status(429).json({ error: "Queue overloaded; retry later" });
+      }
+    }
     const queueId = await enqueueTelemetry(redisQueue, event);
     return res.status(202).json({ event, queueId, status: "queued" });
   } catch (error) { return next(error); }
