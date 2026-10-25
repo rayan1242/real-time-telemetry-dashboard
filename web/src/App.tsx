@@ -3,6 +3,7 @@ import { alertsForRobot } from "./alerts";
 import { useTelemetry } from "./hooks/useTelemetry";
 import MetricChart from "./components/MetricChart";
 import RobotCard from "./components/RobotCard";
+import DeviceManagement from "./components/DeviceManagement";
 import { API, HISTORY_LIMIT, isOnline, timeLabel, type Robot, type Metric, type StatusFilter } from "./telemetry";
 
 
@@ -122,6 +123,8 @@ export default function App() {
         {historyLoading && !history.length ? <div className="chart-empty">Loading historical readings...</div> : <MetricChart points={history} metric={metric} />}
         {last && <p className="chart-footnote">Latest chart reading: {last[metric].toFixed(1)}{metric === "temperature" ? "°C" : "%"} at {timeLabel(last.timestamp)}</p>}
       </section>}
+
+      <DeviceManagement token={token} />
 
       <footer>Local demonstration · Operator token authentication is enabled, but tenant isolation, expiring sessions and production identity management are not implemented. Alerts are derived from the latest readings, not persisted.</footer>
     </main>
