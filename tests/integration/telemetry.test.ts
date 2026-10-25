@@ -5,9 +5,10 @@ import { io } from "socket.io-client";
 
 const base = process.env.API_URL ?? "http://localhost:3000";
 const apiKey = process.env.INGEST_API_KEY ?? "local-demo-key-change-me";
+const dashboardToken = process.env.DASHBOARD_TOKEN ?? "local-dashboard-token-change-me";
 
 async function request(path: string, init?: RequestInit) {
-  const response = await fetch(base + path, init);
+  const response = await fetch(base + path, { ...init, headers: { authorization: `Bearer ${dashboardToken}`, ...init?.headers } });
   return { response, body: await response.json() };
 }
 
@@ -37,7 +38,7 @@ test("Queue, PostgreSQL idempotency, ordering and WebSocket delivery", { timeout
 
   const deviceId = "test-" + randomUUID().slice(0, 8);
   const eventId = randomUUID();
-  const socket = io(base, { transports: ["websocket"], reconnection: false, autoConnect: false });
+  const socket = io(base, { transports: ["websocket"], reconnection: false, autoConnect: false, auth: { token: dashboardToken } });
   try {
     await new Promise<void>((resolve, reject) => {
       const timer = setTimeout(() => reject(new Error("Socket connection timed out")), 5000);
@@ -73,6 +74,8 @@ test("Queue, PostgreSQL idempotency, ordering and WebSocket delivery", { timeout
     });
     assert.equal(old.response.status, 202);
 
+    const denied = await fetch(base + "/api/robots");
+    assert.equal(denied.status, 401);
     const robots = await eventually(() => request("/api/robots"), result =>
       result.body.items.some((item: any) => item.deviceId === deviceId && item.temperature === 25));
     assert.equal(robots.response.status, 200);
