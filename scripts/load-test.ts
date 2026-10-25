@@ -50,6 +50,7 @@ function percentile(p: number) {
   return sorted[Math.max(0, Math.ceil(p * sorted.length) - 1)] ?? 0;
 }
 
+async function main() {
 await Promise.all(Array.from({ length: concurrency }, () => client()));
 const elapsed = (performance.now() - start) / 1000;
 console.log(JSON.stringify({
@@ -59,3 +60,5 @@ console.log(JSON.stringify({
 }, null, 2));
 if (failed) process.exitCode = 1;
 // This measures HTTP acceptance latency only, NOT worker persistence or WebSocket delivery.
+}
+void main().catch(error => { console.error(error); process.exitCode = 1; });
