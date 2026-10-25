@@ -61,7 +61,7 @@ export function useTelemetry(token: string) {
     socket.on("connect", subscribe);
     if (socket.connected) subscribe();
     return () => { socket.off("connect", subscribe); };
-  }, [deviceKey]);
+  }, [deviceKey, token]);
 
   return { robots, connected, snapshotError, now, items };
 }
