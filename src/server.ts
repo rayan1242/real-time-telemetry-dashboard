@@ -102,10 +102,10 @@ async function shutdown(signal: string) {
   }, 10000);
   deadline.unref();
   try {
-    // Stop accepting requests and allow in-flight HTTP requests to finish.
-    await new Promise<void>((resolve, reject) => httpServer.close(error => error ? reject(error) : resolve()));
+    // Socket.IO closes WebSocket connections and the underlying HTTP server.
+    // The readiness endpoint already rejects new traffic during draining.
     io.disconnectSockets(true);
-    await io.close();
+    await new Promise<void>(resolve => io.close(() => resolve()));
     if (redisPub?.isOpen) await redisPub.quit();
     if (redisSub?.isOpen) await redisSub.quit();
     await pool.end();
