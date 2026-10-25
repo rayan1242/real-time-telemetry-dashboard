@@ -143,7 +143,9 @@ async function main() {
       const parsed = telemetrySchema.safeParse(JSON.parse(payload));
       if (!parsed.success) return;
       const event = normalizeTelemetry(parsed.data);
-      io.to(`robot:${event.deviceId}`).emit("telemetry", event);
+      // Every API instance receives this Pub/Sub message; emit to local sockets
+      // only, otherwise the Socket.IO Redis adapter multiplies broadcasts.
+      io.local.to(`robot:${event.deviceId}`).emit("telemetry", event);
     } catch (error) { console.error("Invalid worker notification:", error); }
   });
   redisPub = pub;
