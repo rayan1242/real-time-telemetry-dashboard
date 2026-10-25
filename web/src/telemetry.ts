@@ -7,7 +7,7 @@ export type Robot = {
 };
 export type StatusFilter = "all" | "online" | "offline";
 export type Metric = "temperature" | "battery";
-export const API = import.meta.env.VITE_API_URL ?? "http://localhost:3000";
+export const API = import.meta.env.VITE_API_URL ?? (import.meta.env.PROD ? window.location.origin : "http://localhost:3000");
 export const HISTORY_LIMIT = 80;
 export function merge(current: Record<string, Robot>, next: Robot): Record<string, Robot> {
   const previous = current[next.deviceId];

@@ -42,6 +42,7 @@ services:
       CLIENT_ORIGIN: http://localhost:5173
       INGEST_API_KEY: ${INGEST_API_KEY:-local-demo-key-change-me}
       DASHBOARD_TOKEN: ${DASHBOARD_TOKEN:-local-dashboard-token-change-me}
+      MAX_QUEUE_LAG: ${MAX_QUEUE_LAG:-5000}
       DEVICE_API_KEYS: ${DEVICE_API_KEYS:-}
     ports: ["3000:3000"]
     depends_on:

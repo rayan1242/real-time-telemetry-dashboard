@@ -153,3 +153,14 @@ npm run dev
 Open http://localhost:5173 and enter the configured `DASHBOARD_TOKEN`. In another terminal at the repo root, run `npm run simulate`. To test the access boundary, `curl -i http://localhost:3000/api/robots` should return HTTP 401, while the same request with `-H 'Authorization: Bearer <token>'` should succeed.
 
 **Limitations:** A shared operator token is not individual user authentication or authorization. There is no identity provider, user session expiration, refresh token, audit trail, rate limiting, tenant isolation, CSRF strategy for cookie sessions, or credential rotation. A static bearer token grants the same fleet access to every holder. Those are required before production use. Tests and build must be run locally; commits alone do not verify runtime behavior.
+
+
+## Phase 5–7: load, CI, interview prep and AWS deployment starter
+
+**Phase 5 — scalability starter:** `MAX_QUEUE_LAG` (default 5000) applies soft admission control when Redis consumer-group lag is high. Ingestion returns 429 with Retry-After when the threshold is exceeded. The operator-protected `GET /api/ops/queue` endpoint reports stream length, pending entries, and approximate consumer lag. Run `npm run load:test` against the running stack to generate 1,000 concurrent test events by default. Adjust `LOAD_EVENTS`, `LOAD_CONCURRENCY`, `LOAD_ROBOTS` to tune the test. The reported p50/p95/p99 latencies cover **HTTP acceptance only**, not end-to-end persistence. This is not a production throughput guarantee or a hard Redis storage limit.
+
+**Phase 6 — quality:** `.github/workflows/ci.yml` defines backend typecheck/unit tests, frontend build/unit tests, and a Docker Compose integration test job. See `docs/INTERVIEW_PREP.md` for a 30-second pitch, architecture walkthrough, interview Q&A, and live demo script. Check actual CI results before claiming tests passed.
+
+**Phase 7 — AWS starter:** `deploy/aws/` contains a single-host EC2 Compose configuration with Caddy, same-origin React/REST/WebSocket routing, and optional automatic HTTPS for a real domain. See `deploy/aws/README.md` for setup and security precautions. **No AWS resources were provisioned or deployed by this repository change.** This demo stack is not high availability and is not appropriate for public production use without additional security and operations work.
+
+The PRs are intentionally stacked: Phase 2 -> Phase 3 -> Phase 4 -> completion. Merge and validate in order; the completion branch alone contains all work.

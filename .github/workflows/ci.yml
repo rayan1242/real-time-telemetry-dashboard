@@ -1,0 +1,65 @@
+name: Verify telemetry dashboard
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  unit-and-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Backend dependencies
+        run: npm install
+      - name: Backend typecheck
+        run: npm run typecheck
+      - name: Backend unit tests
+        run: npm test
+      - name: Frontend dependencies
+        run: npm install
+        working-directory: web
+      - name: Frontend build
+        run: npm run build
+        working-directory: web
+      - name: Frontend unit tests
+        run: npm test
+        working-directory: web
+
+  integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install test dependencies
+        run: npm install
+      - name: Start services
+        run: docker compose up --build -d
+        env:
+          INGEST_API_KEY: ci-ingest-secret
+          DASHBOARD_TOKEN: ci-dashboard-secret
+      - name: Wait for API readiness
+        run: |
+          for i in $(seq 1 60); do
+            if curl -fsS http://localhost:3000/health; then exit 0; fi
+            sleep 2
+          done
+          docker compose logs
+          exit 1
+      - name: Integration tests
+        run: npm run test:integration
+        env:
+          INGEST_API_KEY: ci-ingest-secret
+          DASHBOARD_TOKEN: ci-dashboard-secret
+      - name: Print logs on failure
+        if: failure()
+        run: docker compose logs --no-color
+      - name: Shut down
+        if: always()
+        run: docker compose down -v
