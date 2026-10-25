@@ -5,9 +5,10 @@ import { createServer } from "node:http";
 import { timingSafeEqual } from "node:crypto";
 import { Server } from "socket.io";
 import { createClient } from "redis";
+import { enqueueTelemetry, redisClient, UPDATE_CHANNEL } from "./queue";
 import { createAdapter } from "@socket.io/redis-adapter";
 import { z } from "zod";
-import { pool, latestRobots, robotHistory, saveTelemetry } from "./db";
+import { pool, latestRobots, robotHistory } from "./db";
 import { normalizeTelemetry, telemetrySchema } from "./schema";
 
 const app = express();
@@ -32,7 +33,7 @@ app.get("/live", (_req, res) => res.json({ status: "alive" }));
 app.get("/health", async (_req, res, next) => {
   if (!ready || shuttingDown) return res.status(503).json({ status: "unavailable" });
   try {
-    await pool.query("SELECT 1");
+    await Promise.all([pool.query("SELECT 1"), redisQueue?.ping() ?? Promise.reject(new Error("Redis not ready"))]);
     res.json({ status: "ok" });
   } catch (error) { next(error); }
 });
@@ -65,12 +66,9 @@ app.post("/api/telemetry", async (req, res, next) => {
   if (!parsed.success) return res.status(400).json({ error: "Invalid telemetry", details: parsed.error.flatten() });
   const event = normalizeTelemetry(parsed.data);
   try {
-    const inserted = await saveTelemetry(event);
-    if (inserted) {
-      // The Redis adapter distributes this room broadcast across all Node instances.
-      io.to(`robot:${event.deviceId}`).emit("telemetry", event);
-    }
-    return res.status(inserted ? 202 : 200).json({ event, duplicate: !inserted });
+    if (!redisQueue?.isReady) return res.status(503).json({ error: "Queue unavailable" });
+    const queueId = await enqueueTelemetry(redisQueue, event);
+    return res.status(202).json({ event, queueId, status: "queued" });
   } catch (error) { return next(error); }
 });
 
@@ -94,6 +92,8 @@ app.use((error: Error, _req: express.Request, res: express.Response, _next: expr
 
 let redisPub: ReturnType<typeof createClient> | undefined;
 let redisSub: ReturnType<typeof createClient> | undefined;
+let redisQueue: ReturnType<typeof createClient> | undefined;
+let redisUpdates: ReturnType<typeof createClient> | undefined;
 
 async function shutdown(signal: string) {
   if (shuttingDown) return;
@@ -110,6 +110,8 @@ async function shutdown(signal: string) {
     // The readiness endpoint already rejects new traffic during draining.
     io.disconnectSockets(true);
     await new Promise<void>(resolve => io.close(() => resolve()));
+    if (redisUpdates?.isOpen) await redisUpdates.quit();
+    if (redisQueue?.isOpen) await redisQueue.quit();
     if (redisPub?.isOpen) await redisPub.quit();
     if (redisSub?.isOpen) await redisSub.quit();
     await pool.end();
@@ -131,7 +133,21 @@ async function main() {
   const sub = pub.duplicate();
   pub.on("error", console.error);
   sub.on("error", console.error);
-  await Promise.all([pub.connect(), sub.connect()]);
+  const queue = redisClient();
+  const updates = redisClient();
+  await Promise.all([pub.connect(), sub.connect(), queue.connect(), updates.connect()]);
+  redisQueue = queue;
+  redisUpdates = updates;
+  await updates.subscribe(UPDATE_CHANNEL, payload => {
+    try {
+      const parsed = telemetrySchema.safeParse(JSON.parse(payload));
+      if (!parsed.success) return;
+      const event = normalizeTelemetry(parsed.data);
+      // Every API instance receives this Pub/Sub message; emit to local sockets
+      // only, otherwise the Socket.IO Redis adapter multiplies broadcasts.
+      io.local.to(`robot:${event.deviceId}`).emit("telemetry", event);
+    } catch (error) { console.error("Invalid worker notification:", error); }
+  });
   redisPub = pub;
   redisSub = sub;
   io.adapter(createAdapter(pub, sub));
