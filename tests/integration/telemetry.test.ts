@@ -35,10 +35,10 @@ test("API, PostgreSQL idempotency, ordering and WebSocket delivery", { timeout: 
       socket.once("connect_error", error => { clearTimeout(timer); reject(error); });
       socket.connect();
     });
-    socket.emit("watch", [deviceId]);
-    // Room join is asynchronous; ensure the subscription is established before ingest.
-    // The server currently does not acknowledge watch, so wait briefly for this integration check.
-    await new Promise(resolve => setTimeout(resolve, 150));
+    const subscribed = await new Promise<{ ok: boolean }>((resolve, reject) => {
+      socket.timeout(3000).emit("watch", [deviceId], (error: Error | null, result: { ok: boolean }) => error ? reject(error) : resolve(result));
+    });
+    assert.equal(subscribed.ok, true);
     const received = new Promise<any>((resolve, reject) => {
       const timer = setTimeout(() => reject(new Error("WebSocket event timed out")), 5000);
       socket.once("telemetry", event => { clearTimeout(timer); resolve(event); });
