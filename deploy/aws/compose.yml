@@ -1,0 +1,74 @@
+# Single-host AWS EC2 demonstration, NOT high-availability production infrastructure.
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: telemetry
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
+      POSTGRES_DB: telemetry
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ../../db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U telemetry"]
+      interval: 5s
+      retries: 15
+    restart: unless-stopped
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec"]
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      retries: 15
+    restart: unless-stopped
+  worker:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    command: ["npm", "run", "worker"]
+    environment:
+      DATABASE_URL: postgres://telemetry:${POSTGRES_PASSWORD}@postgres:5432/telemetry
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    restart: unless-stopped
+  api:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    environment:
+      PORT: 3000
+      DATABASE_URL: postgres://telemetry:${POSTGRES_PASSWORD}@postgres:5432/telemetry
+      REDIS_URL: redis://redis:6379
+      CLIENT_ORIGIN: ${PUBLIC_ORIGIN:?Set PUBLIC_ORIGIN}
+      INGEST_API_KEY: ${INGEST_API_KEY:?Set INGEST_API_KEY}
+      DASHBOARD_TOKEN: ${DASHBOARD_TOKEN:?Set DASHBOARD_TOKEN}
+      MAX_QUEUE_LAG: ${MAX_QUEUE_LAG:-5000}
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    restart: unless-stopped
+  web:
+    build:
+      context: ../..
+      dockerfile: deploy/aws/Dockerfile.web
+    environment:
+      DOMAIN: ${DOMAIN:-:80}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - api
+    restart: unless-stopped
+volumes:
+  pgdata:
+  redisdata:
+  caddy_data:
+  caddy_config:
