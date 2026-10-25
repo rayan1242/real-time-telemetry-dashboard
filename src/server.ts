@@ -16,6 +16,8 @@ app.use(cors({ origin }));
 app.use(express.json({ limit: "32kb" }));
 const httpServer = createServer(app);
 const io = new Server(httpServer, { cors: { origin }, transports: ["websocket"] });
+let ready = false;
+let shuttingDown = false;
 
 function validKey(provided: unknown): boolean {
   const expected = process.env.INGEST_API_KEY;
@@ -25,7 +27,10 @@ function validKey(provided: unknown): boolean {
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
+app.get("/live", (_req, res) => res.json({ status: "alive" }));
+
 app.get("/health", async (_req, res, next) => {
+  if (!ready || shuttingDown) return res.status(503).json({ status: "unavailable" });
   try {
     await pool.query("SELECT 1");
     res.json({ status: "ok" });
@@ -54,6 +59,7 @@ app.get("/api/telemetry", async (_req, res, next) => {
 });
 
 app.post("/api/telemetry", async (req, res, next) => {
+  if (shuttingDown) return res.status(503).json({ error: "Server is shutting down" });
   if (!validKey(req.header("x-api-key"))) return res.status(401).json({ error: "Invalid ingestion API key" });
   const parsed = telemetrySchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: "Invalid telemetry", details: parsed.error.flatten() });
@@ -82,6 +88,38 @@ app.use((error: Error, _req: express.Request, res: express.Response, _next: expr
   res.status(500).json({ error: "Internal server error" });
 });
 
+let redisPub: ReturnType<typeof createClient> | undefined;
+let redisSub: ReturnType<typeof createClient> | undefined;
+
+async function shutdown(signal: string) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  ready = false;
+  console.log(`Received ${signal}; draining connections`);
+  const deadline = setTimeout(() => {
+    console.error("Graceful shutdown timed out");
+    process.exit(1);
+  }, 10000);
+  deadline.unref();
+  try {
+    // Stop accepting requests and allow in-flight HTTP requests to finish.
+    await new Promise<void>((resolve, reject) => httpServer.close(error => error ? reject(error) : resolve()));
+    io.disconnectSockets(true);
+    await io.close();
+    if (redisPub?.isOpen) await redisPub.quit();
+    if (redisSub?.isOpen) await redisSub.quit();
+    await pool.end();
+    clearTimeout(deadline);
+    process.exit(0);
+  } catch (error) {
+    console.error("Shutdown failed", error);
+    process.exit(1);
+  }
+}
+
+process.once("SIGTERM", () => { void shutdown("SIGTERM"); });
+process.once("SIGINT", () => { void shutdown("SIGINT"); });
+
 async function main() {
   if (!process.env.DATABASE_URL || !process.env.REDIS_URL || !process.env.INGEST_API_KEY)
     throw new Error("DATABASE_URL, REDIS_URL, and INGEST_API_KEY are required");
@@ -90,9 +128,14 @@ async function main() {
   pub.on("error", console.error);
   sub.on("error", console.error);
   await Promise.all([pub.connect(), sub.connect()]);
+  redisPub = pub;
+  redisSub = sub;
   io.adapter(createAdapter(pub, sub));
   await pool.query("SELECT 1");
   const port = Number(process.env.PORT ?? 3000);
-  httpServer.listen(port, () => console.log(`API listening on http://localhost:${port}`));
+  httpServer.listen(port, () => {
+    ready = true;
+    console.log(`API listening on http://localhost:${port}`);
+  });
 }
 main().catch((error) => { console.error(error); process.exit(1); });
