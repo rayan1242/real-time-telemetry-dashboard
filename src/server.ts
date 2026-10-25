@@ -10,6 +10,7 @@ import { createAdapter } from "@socket.io/redis-adapter";
 import { z } from "zod";
 import { pool, latestRobots, robotHistory } from "./db";
 import { normalizeTelemetry, telemetrySchema } from "./schema";
+import { ensureDeviceTables, listDevices, registerDevice, updateDevice, deviceAudit, registerDeviceSchema, updateDeviceSchema } from "./devices";
 
 const app = express();
 const origin = process.env.CLIENT_ORIGIN ?? "http://localhost:5173";
@@ -43,6 +44,46 @@ app.get("/health", async (_req, res, next) => {
 app.get("/api/ops/queue", requireDashboard, async (_req, res, next) => {
   try { res.json(await queueStats()); }
   catch (error) { next(error); }
+});
+
+
+// Demo operator identity is shared: audit actor is a label, not an authenticated person.
+const auditActor = "dashboard-operator";
+const deviceIdSchema = z.string().min(1).max(100).regex(/^[a-zA-Z0-9_-]+$/);
+function deviceError(error: unknown, res: express.Response, next: express.NextFunction) {
+  if (typeof error === "object" && error !== null && "code" in error && error.code === "23505") {
+    res.status(409).json({ error: "Device ID or serial number already exists" });
+    return;
+  }
+  next(error);
+}
+
+app.get("/api/devices", requireDashboard, async (_req, res, next) => {
+  try { res.json({ items: await listDevices() }); } catch (error) { next(error); }
+});
+
+app.post("/api/devices", requireDashboard, async (req, res, next) => {
+  const parsed = registerDeviceSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: "Invalid device registration", details: parsed.error.flatten() });
+  try { return res.status(201).json({ device: await registerDevice(parsed.data, auditActor) }); }
+  catch (error) { return deviceError(error, res, next); }
+});
+
+app.patch("/api/devices/:deviceId", requireDashboard, async (req, res, next) => {
+  const deviceId = deviceIdSchema.safeParse(req.params.deviceId);
+  const parsed = updateDeviceSchema.safeParse(req.body);
+  if (!deviceId.success || !parsed.success) return res.status(400).json({ error: "Invalid device update" });
+  try {
+    const device = await updateDevice(deviceId.data, parsed.data, auditActor);
+    return device ? res.json({ device }) : res.status(404).json({ error: "Device not found" });
+  } catch (error) { return deviceError(error, res, next); }
+});
+
+app.get("/api/devices/:deviceId/audit", requireDashboard, async (req, res, next) => {
+  const deviceId = deviceIdSchema.safeParse(req.params.deviceId);
+  if (!deviceId.success) return res.status(400).json({ error: "Invalid device ID" });
+  try { return res.json({ items: await deviceAudit(deviceId.data) }); }
+  catch (error) { return next(error); }
 });
 
 app.get("/api/robots", requireDashboard, async (_req, res, next) => {
@@ -179,6 +220,7 @@ async function main() {
   redisSub = sub;
   io.adapter(createAdapter(pub, sub));
   await pool.query("SELECT 1");
+  await ensureDeviceTables();
   const port = Number(process.env.PORT ?? 3000);
   httpServer.listen(port, () => {
     ready = true;
